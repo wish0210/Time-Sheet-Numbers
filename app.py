@@ -27,36 +27,60 @@ def process_file():
         return redirect(request.url)
     if file:
         try:
-            # Read the first two lines separately
+            # Read the first three lines separately
             file.seek(0)
-            first_two_lines = [file.readline().strip(), file.readline().strip()]
+            first_three_lines = [file.readline().decode('ISO-8859-1').strip(),
+                                 file.readline().decode('ISO-8859-1').strip(),
+                                 file.readline().decode('ISO-8859-1').strip()]
             file.seek(0)
-            df = pd.read_csv(file, encoding='ISO-8859-1', skiprows=2, on_bad_lines='skip')
+            df = pd.read_csv(file, encoding='ISO-8859-1', skiprows=2, on_bad_lines='skip', header=0)
         except pd.errors.ParserError as e:
             return f"Error parsing CSV file: {e}"
         except UnicodeDecodeError as e:
             return f"Error decoding CSV file: {e}"
 
-        output = process_data(df, first_two_lines)
+        try:
+            output = process_data(df, first_three_lines)
+        except ValueError as e:
+            return f"{e}"
+        
         original_filename = os.path.splitext(file.filename)[0] + "_processed.xlsx"
         return send_file(output, download_name=original_filename, as_attachment=True)
 
-def process_data(df, first_two_lines):
+def process_data(df, first_three_lines):
     required_columns = ['EMP L NAME', 'EMP F NAME', 'DATE', 'IN', 'OUT', 'TOTAL']
-    if not all(col in df.columns for col in required_columns):
-        raise ValueError("CSV file is missing required columns")
+    df.columns = df.columns.str.strip().str.upper()  # Strip any whitespace and convert column names to uppercase
 
-    df['DATE'] = pd.to_datetime(df['DATE'])
+    # Debugging: print the columns to see what is being read
+    print("Columns in CSV:", df.columns.tolist())
+
+    # Attempt to match required columns
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    if missing_columns:
+        raise ValueError("CSV file is missing required columns: " + ", ".join(missing_columns))
+
+    df['DATE'] = pd.to_datetime(df['DATE'], errors='coerce')
+    if df['DATE'].isna().any():
+        raise ValueError("Invalid date format in 'DATE' column.")
 
     output = BytesIO()
     wb = Workbook()
     ws = wb.active
 
-    # Write the first two lines to the Excel file
-    ws.append([first_two_lines[0]])
-    ws.append([first_two_lines[1]])
+    # Split the header line into separate cells starting from column B
+    header_values = first_three_lines[2].split(',')
+    for col_idx, header in enumerate(header_values, start=2):
+        ws.cell(row=3, column=col_idx, value=header.strip())
 
-    row = 3  # Start writing data from the third row
+    # Write the first two lines to start from column B, making sure to write each value separately
+    first_line_values = first_three_lines[0].split(',')
+    second_line_values = first_three_lines[1].split(',')
+    for col_idx, value in enumerate(first_line_values, start=2):
+        ws.cell(row=1, column=col_idx, value=value.strip())
+    for col_idx, value in enumerate(second_line_values, start=2):
+        ws.cell(row=2, column=col_idx, value=value.strip())
+
+    row = 4  # Start writing data from the fourth row
     employee_counter = 1
 
     # Group by employee but maintain the order
